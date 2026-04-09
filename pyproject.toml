@@ -5,10 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "h5py",
+    "hdf5plugin",
     "jax",
     "magicgui",
     "napari[pyqt6]",
     "ruamel-yaml",
+    "scikit-image",
     "tifffile",
     "torch",
     "zarr",

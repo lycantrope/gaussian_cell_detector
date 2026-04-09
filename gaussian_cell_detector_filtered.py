@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import h5py
 import napari
 import numpy as np
 import torch
@@ -329,11 +330,11 @@ def find_peak_all(
     show_model: bool = False,
 ):
     _, filter_fn = parameters["filter_fn"](**parameters["filter_kws"])
-    for t in range(im_4d.shape[0]):
+    for t, im in enumerate(im_4d):
         # Process one frame at a time
         tic = time.perf_counter()
 
-        filtered_im = filter_fn(im_4d[t])
+        filtered_im = filter_fn(im)
 
         peaks, peak_values = detect_local_maxima_3d(
             filtered_im,
@@ -405,17 +406,152 @@ def main():
             if layer in viewer.layers:
                 viewer.layers.remove(viewer.layers[layer])
 
+    def imread_all_iter(filename, load_mode, used_channel=0):
+        def _ensure_3d(im):
+            if im.ndim == 2:
+                im = im[None, ...]
+            return np.ascontiguousarray(im).astype("f4")
+
+        if load_mode == "TIFF stack":
+            image_mmap = tifffile.memmap(filename, mode="r")
+            assert image_mmap.ndim in (3, 4), "Only support TZYX or TYX"
+
+            T = image_mmap.shape[0]
+            yield T
+            for t in range(T):
+                yield _ensure_3d(image_mmap[t])
+
+            del image_mmap
+        elif load_mode == "TIFF sequence":
+            filelist = get_file_list(filename)
+            # We read the file starts from the first_file
+
+            # check file shape:
+            im = tifffile.imread(filelist[0])
+            assert im.ndim < 4, "Tiff sequence does not support 4D stack (T, Z, Y, X)"
+            yield len(filelist)
+            for f in filelist:
+                yield _ensure_3d(tifffile.imread(f))
+
+        elif load_mode == "HDF5 (ascent)":
+            with h5py.File(filename, "r") as handler:
+                t_keys = (k for k in handler.keys() if str(k).startswith("t"))
+                t_keys = sorted(t_keys, key=lambda x: int(x[1:]))
+
+                grp = handler[t_keys[0]]
+                assert (
+                    isinstance(grp, h5py.Group) and f"c{used_channel:d}" in grp.keys()
+                ), f"Cannot found channels or dataset is not ascent format: c{used_channel:d}"
+                yield len(t_keys)
+                for t in t_keys:
+                    dset = handler[f"{t}/c{used_channel}"]
+                    assert isinstance(dset, h5py.Dataset)
+                    yield np.ascontiguousarray(dset).astype("f4")
+        else:
+            return
+
+    def imread(
+        first_file, load_mode, start=0, no_of_frames=-1, used_channel=0
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        scales = None
+        if load_mode == "TIFF stack":
+            image_mmap = tifffile.memmap(first_file, mode="r")
+
+            if image_mmap.ndim == 4:
+                T = image_mmap.shape[0]
+                images = image_mmap[: min(no_of_frames, T)]
+            elif image_mmap.ndim == 3:
+                # (Z, Y, X) => (1, Z, Y, X)
+                images = image_mmap[None, ...]
+            elif image_mmap.ndim == 2:
+                # (Y, X) => (1, 1, Y, X)
+                images = image_mmap[None, None, ...]
+            else:
+                raise ValueError(f"Unsupported shape : {image_mmap.shape}")
+            if no_of_frames is None:
+                no_of_frames = images.shape[0] - start
+
+            assert start + no_of_frames < images.shape[0], ""
+            images = np.ascontiguousarray(images[start : start + no_of_frames]).astype(
+                "f4"
+            )
+
+            del image_mmap
+        elif load_mode == "TIFF sequence":
+            filelist = get_file_list(first_file)
+            # We read the file starts from the first_file
+            start = filelist.index(first_file)
+            load_image_widget.start.value = start
+            if no_of_frames is None:
+                no_of_frames = len(filelist) - start
+
+            end = min(start + no_of_frames, len(filelist))
+            filelist = filelist[start:end]
+            # check file shape:
+            im = tifffile.imread(filelist[0])
+            assert im.ndim < 4, "Tiff sequence does not support 4D stack (T, Z, Y, X)"
+
+            img_seq = tifffile.TiffSequence(get_file_list(first_file))
+            images = img_seq.asarray().astype("f4")
+            if images.ndim == 3:
+                # Read from 2D sequence.
+                # (T, Y, X) => (T, 1, Y, X)
+                images[:, None, ...]
+            images = np.ascontiguousarray(images)
+
+        elif load_mode == "HDF5 (ascent)":
+            with h5py.File(first_file, "r") as handler:
+                t_keys = (k for k in handler.keys() if str(k).startswith("t"))
+                t_keys = sorted(t_keys, key=lambda x: int(x[1:]))
+
+                if no_of_frames is None:
+                    no_of_frames = len(t_keys) - start
+
+                end = min(start + no_of_frames, len(t_keys))
+                t_keys = t_keys[start:end]
+                grp = handler[t_keys[0]]
+                assert (
+                    isinstance(grp, h5py.Group) and f"c{used_channel:d}" in grp.keys()
+                ), f"Cannot found channels or dataset is not ascent format: c{used_channel:d}"
+                images = np.stack(
+                    [np.asarray(handler[f"{t}/c{used_channel:d}"]) for t in t_keys]
+                )
+                ds = handler[f"{t_keys[0]}/c{used_channel}"]
+
+                # I add the attribute in the ascent dataset that represent real scales
+                if "element_size_um" in ds.attrs:
+                    scales = np.array(ds.attrs["element_size_um"])
+                    z_scale_widget.z_scale.value = scales[0]
+
+            images = np.ascontiguousarray(images).astype("f4")
+        else:
+            return None, None
+
+        # Either TZYX or ZYX should works
+        if scales is None:
+            scales = np.ones(images.ndim)
+            scales[-3] = z_scale_widget.z_scale.value
+        return images, scales
+
     @magicgui(
-        load_mode={"choices": ["TIFF stack", "TIFF sequence"]},
+        load_mode={"choices": ["TIFF stack", "TIFF sequence", "HDF5 (ascent)"]},
+        first_file={
+            "widget_type": FileEdit,
+            "mode": "r",
+            "filter": "*.tif *.tiff *.h5",
+        },
+        start={"min": 0, "max": 10000, "step": 1},
         no_of_frames={"min": 0, "max": 10000, "step": 1},
-        first_file={"widget_type": FileEdit, "mode": "r", "filter": "*.tif *.tiff"},
+        used_channel={"min": 0, "max": 10000, "step": 1},
         persist=True,
         call_button="Load Image",
     )
     def load_image_widget(
         load_mode="TIFF stack",
+        start: int = 0,
         no_of_frames: int = 10000,
         first_file: Path = Path.home(),
+        used_channel=1,
     ):
         """
         @magicgui(
@@ -431,53 +567,19 @@ def main():
             show_message(f"Selected file is not a valid TIFF file: {first_file.name}")
             return
 
-        if load_mode == "TIFF stack":
-            image_mmap = tifffile.memmap(first_file, mode="r")
-
-            if image_mmap.ndim == 4:
-                T = image_mmap.shape[0]
-                images = image_mmap[: min(no_of_frames, T)]
-            elif image_mmap.ndim == 3:
-                # (Z, Y, X) => (1, Z, Y, X)
-                images = image_mmap[None, ...]
-            elif image_mmap.ndim == 2:
-                # (Y, X) => (1, 1, Y, X)
-                images = image_mmap[None, None, ...]
-            else:
-                raise ValueError(f"Unsupported shape : {image_mmap.shape}")
-
-            images = np.ascontiguousarray(images).astype("f4")
-
-            del image_mmap
-        elif "TIFF sequence":
-            filelist = get_file_list(first_file)
-            # We read the file starts from the first_file
-            start = filelist.index(first_file)
-            end = min(start + no_of_frames, len(filelist))
-            filelist = filelist[start:end]
-            # check file shape:
-            im = tifffile.imread(filelist[0])
-            assert im.ndim < 4, "Tiff sequence does not support 4D stack (T, Z, Y, X)"
-
-            img_seq = tifffile.TiffSequence(get_file_list(first_file))
-            images = img_seq.asarray().astype("f4")
-            if images.ndim == 3:
-                # Read from 2D sequence.
-                # (T, Y, X) => (T, 1, Y, X)
-                images[:, None, ...]
-            images = np.ascontiguousarray(images)
-        else:
-            return
-
         viewer = napari.current_viewer()
-        if images is None or viewer is None:
+        images, scales = imread(
+            first_file=first_file,
+            load_mode=load_mode,
+            start=start,
+            no_of_frames=no_of_frames,
+            used_channel=used_channel,
+        )
+
+        if images is None or viewer is None or scales is None:
             return
         if "original" in viewer.layers:
             viewer.layers.remove(viewer.layers["original"])
-
-        scales = np.ones(images.ndim)
-        # Either TZYX or ZYX should works
-        scales[-3] = z_scale_widget.z_scale.value
 
         low, high = np.percentile(images, (0, 99))
         viewer.add_image(
@@ -489,6 +591,23 @@ def main():
         )
         show_message(f"Image Loaded {images.shape}")
         clear_peak_results()
+
+    def __disable_load_image(load_mode):
+        if load_mode == "TIFF stack":
+            load_image_widget.start.enabled = True
+            load_image_widget.used_channel.enabled = False
+        elif load_mode == "TIFF sequence":
+            load_image_widget.start.enabled = False
+            load_image_widget.used_channel.enabled = False
+        elif load_mode == "HDF5 (ascent)":
+            load_image_widget.start.enabled = True
+            load_image_widget.used_channel.enabled = True
+        else:
+            return
+
+    load_image_widget.start.enabled = True
+    load_image_widget.used_channel.enabled = False
+    load_image_widget.load_mode.changed.connect(__disable_load_image)
 
     @magicgui(
         auto_call=True,
@@ -558,7 +677,7 @@ def main():
         call_button="Find peaks",
         min_distance={"min": 1, "max": 5, "step": 1},
         threshold_percentile={"min": 80, "max": 99.99, "step": 0.01},
-        mode={"choices": ["This frame", "All frames"]},
+        mode={"choices": ["This frame", "All Loaded Frames", "Batch All"]},
         running={
             "widget_type": "CheckBox",
             "enabled": False,
@@ -587,22 +706,57 @@ def main():
         if not parameters:
             filter_widget()
 
-        if mode == "All frames" and images.ndim > 3:
+        if mode == "All Loaded Frames" and images.ndim > 3:
             start_t = 0
             img_to_analyze = images
+            total = img_to_analyze.shape[0]
+        elif mode == "Batch All":
+            start_t = 0
+            img_to_analyze = imread_all_iter(
+                load_image_widget.first_file.value,
+                load_image_widget.load_mode.value,
+                load_image_widget.used_channel.value,
+            )
+            total = next(img_to_analyze)
+            assert isinstance(total, int)
         else:
             start_t = viewer.dims.current_step[0]
             img_to_analyze = images[start_t]
             # Expand t dimension
             img_to_analyze = img_to_analyze[None, ...]
-
-        assert isinstance(img_to_analyze, np.ndarray), "Sanity test for type checking"
+            total = 1
 
         tic = time.perf_counter()
 
-        def finished(*args, tic=tic, **kws):
+        def finished(
+            *args,
+            tic=tic,
+            mode=mode,
+            save_path=Path(load_image_widget.first_file.value).parent / "all_peaks.csv",
+            **kws,
+        ):
             find_peak_widget.running.value = False
             find_peak_widget.running.text = "Idle"
+            find_peak_widget.mode.enabled = True
+            load_image_widget.enabled = True
+            if mode == "Batch All":
+                keys = sorted(results.keys())
+                peaks = np.concatenate([results[k].peaks for k in keys])
+                peak_values = np.concatenate([results[k].peak_values for k in keys])
+                object_id = np.arange(len(peaks))
+                peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
+                peaks2 = peaks2.astype("u4")
+                header = "object_id,t,z,y,x,peak_values"
+                np.savetxt(
+                    save_path,
+                    peaks2,
+                    delimiter=",",
+                    header=header,
+                    comments="",
+                    fmt="%d",
+                )
+                show_message(f"All Peaks was saved at: {save_path}")
+
             elapse = time.perf_counter() - tic
             show_message(f"Find Peaks Finished: {elapse:.2f}")
             viewer = napari.current_viewer()
@@ -614,13 +768,15 @@ def main():
         # Disable some button to make process safe.
         find_peak_widget.running.value = True
         find_peak_widget.running.text = "Busy"
+        find_peak_widget.mode.enabled = False
+        load_image_widget.enabled = False
 
         clear_peak_results()
         worker_fn = thread_worker(
             find_peak_all,
             connect={"yielded": update_point_layer, "returned": finished},
             start_thread=True,
-            progress={"total": img_to_analyze.shape[0]},
+            progress={"total": total},
         )
 
         is_single = mode == "This frame"
@@ -663,6 +819,15 @@ def main():
         # Assign the result to global states
         nonlocal results
         results[peak_res.t] = peak_res
+        display_start_t = load_image_widget.start.value
+        display_end_t = display_start_t + load_image_widget.no_of_frames.value
+        peaks_for_display = peak_res.peaks
+        if find_peak_widget.mode.value == "Batch All":
+            # If using batch mode, we only update the
+            #  and (
+            if peak_res.t < display_start_t or peak_res.t >= display_end_t:
+                return
+            peaks_for_display[:, 0] -= display_start_t
 
         # Update napari peaks
         viewer = napari.current_viewer()
@@ -671,12 +836,12 @@ def main():
 
         if "peaks" in viewer.layers:
             prev_peaks = viewer.layers["peaks"].data
-            all_peaks = np.concatenate([prev_peaks, peak_res.peaks])
+            all_peaks = np.concatenate([prev_peaks, peaks_for_display])
             viewer.layers["peaks"].data = all_peaks
         else:
             # insert peaks
             viewer.add_points(
-                peak_res.peaks,
+                peaks_for_display,
                 name="peaks",
                 size=4,
                 face_color="cyan",
@@ -807,7 +972,6 @@ def main():
             header=header,
             comments="",
             fmt="%d",
-            newline="\n",
         )
 
         # Save filter and local maximum conditions
@@ -863,13 +1027,14 @@ def main():
         labels=False,
     )
 
-    viewer.window.add_dock_widget(
+    wid1 = viewer.window.add_dock_widget(
         container,
         area="right",
         name="GaussianCellDetector",
         tabify=True,
     )
-    viewer.window.add_dock_widget(
+
+    wid2 = viewer.window.add_dock_widget(
         Container(
             widgets=[Label(value="Status"), status_board],
             labels=False,
@@ -878,6 +1043,11 @@ def main():
         name="Log",
         tabify=True,
     )
+
+    # This setting can move GaussianCellDetector to the first at startup
+    wid2.hide()
+    wid1.show()
+    wid2.show()
 
     napari.run()
 
