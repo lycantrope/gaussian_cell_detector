@@ -756,7 +756,7 @@ def main():
             tic=tic,
             mode=mode,
             save_path=Path(load_image_widget.first_file.value).parent
-            / f"all_peaks-{parameters['filter_type']}-{i_part:d}_{f_part_as_i:d}.csv",
+            / f"all_peaks-{parameters['filter_type']}-{int(i_part):d}_{f_part_as_i:d}.csv",
             **kws,
         ):
             find_peak_widget.running.value = False
@@ -851,8 +851,13 @@ def main():
             #  and (
             if peak_res.t < display_start_t or peak_res.t >= display_end_t:
                 return
+
+            # We must copy before offset the timestamp for display, otherwise the final result will be affected.
+            peaks_for_display = np.copy(peak_res.peaks)
             peaks_for_display[:, 0] -= display_start_t
 
+        # 100 frames =>
+        # 0-49
         # Update napari peaks
         viewer = napari.current_viewer()
         if viewer is None:
