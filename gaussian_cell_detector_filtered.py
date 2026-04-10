@@ -621,14 +621,12 @@ def main():
         elif load_mode == "TIFF sequence":
             load_image_widget.start.enabled = False
             load_image_widget.used_channel.enabled = False
-        elif load_mode == "HDF5 (ascent)":
+        else:
             load_image_widget.start.enabled = True
             load_image_widget.used_channel.enabled = True
-        else:
-            return
 
     load_image_widget.start.enabled = True
-    load_image_widget.used_channel.enabled = False
+    load_image_widget.used_channel.enabled = True
     load_image_widget.load_mode.changed.connect(__disable_load_image)
 
     @magicgui(
