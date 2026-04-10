@@ -1,3 +1,4 @@
+import colorsys
 import os
 import re
 import time
@@ -15,6 +16,7 @@ import torch.nn.functional as F
 from magicgui import magicgui, use_app
 from magicgui.widgets import Container, FileEdit, Label, LineEdit, PushButton, TextEdit
 from napari.qt import thread_worker
+from napari.utils import Colormap
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from scipy.ndimage import distance_transform_edt, maximum_filter
@@ -24,6 +26,25 @@ from skimage.segmentation import watershed
 from tifffile import tifffile
 
 DEVICE = torch.accelerator.current_accelerator() or torch.device("cpu")
+
+
+def random_label_cmap(n=2**16, h=(0.0, 1.0), l=(0.4, 1.0), s=(0.2, 0.8), seed=42):
+    # https://github.com/stardist/stardist/blob/e80c6de700693bc228ed3c9ba1dc19c3785667ee/stardist/plot/plot.py#L8
+    # cols = np.random.rand(n,3)
+    # cols = np.random.uniform(0.1,1.0,(n,3))
+    rng = np.random.default_rng(seed)
+    h = rng.uniform(h[0], h[1], n)
+    l = rng.uniform(l[0], l[1], n)
+    s = rng.uniform(s[0], s[1], n)
+
+    cols = np.stack(
+        [colorsys.hls_to_rgb(_h, _l, _s) for _h, _l, _s in zip(h, l, s)], axis=0
+    )
+    cols[0] = 0
+    return Colormap(cols)
+
+
+lbl_cmap = random_label_cmap()
 
 
 def create_conv3d_filter(kernel: np.ndarray):
@@ -834,18 +855,35 @@ def main():
         if viewer is None:
             return
 
+        group = np.arange(len(peaks_for_display)) + 1
+
         if "peaks" in viewer.layers:
-            prev_peaks = viewer.layers["peaks"].data
+            peak_layer = viewer.layers["peaks"]
+            assert peak_layer is not None, ""
+            prev_peaks = peak_layer.data
             all_peaks = np.concatenate([prev_peaks, peaks_for_display])
-            viewer.layers["peaks"].data = all_peaks
+            peak_layer.data = all_peaks
+
+            features = peak_layer.features
+            features.loc[len(prev_peaks) :, "group"] = group
+            peak_layer.features = features
         else:
             # insert peaks
             viewer.add_points(
                 peaks_for_display,
                 name="peaks",
                 size=4,
-                face_color="cyan",
+                face_color="group",
+                face_colormap=lbl_cmap,
                 scale=viewer.layers["original"].scale,
+                features={"group": group},
+                text={
+                    "string": "{group}",
+                    "anchor": "upper_left",
+                    "size": 12,  # fontsize
+                    "color": "yellow",
+                    "translation": [0, 0, -4, 0],
+                },
             )
 
         if peak_res.filtered_im is not None:
