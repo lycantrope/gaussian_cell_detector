@@ -196,7 +196,7 @@ def create_valid_region_mask(
 
 def detect_local_maxima_3d(
     image: np.ndarray,
-    min_distance: int,
+    min_distances: np.ndarray,
     threshold_percentile: float = 99.5,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -206,7 +206,7 @@ def detect_local_maxima_3d(
     threshold_percentile: e.g. 99.5
     """
 
-    size = 2 * min_distance + 1
+    size = 2 * min_distances + 1
     max_filt = maximum_filter(image, size=size, mode="constant")
 
     threshold_abs = np.percentile(image, threshold_percentile)
@@ -347,7 +347,7 @@ def find_peak_all(
     start_t,
     im_4d,
     parameters,
-    min_distance,
+    min_distances,
     threshold_percentile,
     show_filter: bool = False,
     show_model: bool = False,
@@ -361,7 +361,7 @@ def find_peak_all(
 
         peaks, peak_values = detect_local_maxima_3d(
             filtered_im,
-            min_distance,
+            min_distances,
             threshold_percentile,
         )
         # Time estimation.
@@ -804,11 +804,18 @@ def main():
         )
 
         is_single = mode == "This frame"
+
+        min_distances = np.ones(3) * min_distance
+
+        min_distances[0] = max(1, min_distances[0] / z_scale_widget.z_scale.value)
+
+        min_distances = min_distances.astype(int)
+
         worker_fn(
             start_t,
             img_to_analyze,
             parameters,
-            min_distance,
+            min_distances,
             threshold_percentile,
             show_filtered and is_single,
             show_model and is_single,
@@ -1076,7 +1083,7 @@ def main():
 
     wid1 = QScrollArea()
     wid1.setWidget(container.native)
-
+    wid1.setMaximumWidth(480)
     wid1 = viewer.window.add_dock_widget(
         wid1,
         area="right",
