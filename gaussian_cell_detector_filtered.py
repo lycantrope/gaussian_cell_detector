@@ -1,4 +1,5 @@
 import colorsys
+import math
 import os
 import re
 import time
@@ -747,12 +748,15 @@ def main():
             total = 1
 
         tic = time.perf_counter()
+        f_part, i_part = math.modf(threshold_percentile)
+        f_part_as_i = int(f_part * 10)
 
         def finished(
             *args,
             tic=tic,
             mode=mode,
-            save_path=Path(load_image_widget.first_file.value).parent / "all_peaks.csv",
+            save_path=Path(load_image_widget.first_file.value).parent
+            / f"all_peaks-{parameters['filter_type']}-{i_part:d}_{f_part_as_i:d}.csv",
             **kws,
         ):
             find_peak_widget.running.value = False
