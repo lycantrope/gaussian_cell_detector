@@ -17,6 +17,7 @@ from magicgui import magicgui, use_app
 from magicgui.widgets import Container, FileEdit, Label, LineEdit, PushButton, TextEdit
 from napari.qt import thread_worker
 from napari.utils import Colormap
+from qtpy.QtWidgets import QScrollArea
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from scipy.ndimage import distance_transform_edt, maximum_filter
@@ -1063,20 +1064,28 @@ def main():
             save_result_widget,
         ],
         labels=False,
+        scrollable=True,
     )
 
+    wid1 = QScrollArea()
+    wid1.setWidget(container.native)
+
     wid1 = viewer.window.add_dock_widget(
-        container,
+        wid1,
         area="right",
         name="GaussianCellDetector",
         tabify=True,
     )
-
-    wid2 = viewer.window.add_dock_widget(
+    wid2 = QScrollArea()
+    wid2.setWidget(
         Container(
             widgets=[Label(value="Status"), status_board],
             labels=False,
-        ),
+        ).native
+    )
+
+    wid2 = viewer.window.add_dock_widget(
+        wid2,
         area="right",
         name="Log",
         tabify=True,
