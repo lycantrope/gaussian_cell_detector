@@ -544,6 +544,7 @@ def main():
                 # I add the attribute in the ascent dataset that represent real scales
                 if "element_size_um" in ds.attrs:
                     scales = np.array(ds.attrs["element_size_um"])
+                    scales /= scales[1]
                     z_scale_widget.z_scale.value = scales[0]
 
             images = np.ascontiguousarray(images).astype("f4")
