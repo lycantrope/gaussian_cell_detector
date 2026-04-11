@@ -543,8 +543,18 @@ def main():
 
                 # I add the attribute in the ascent dataset that represent real scales
                 if "element_size_um" in ds.attrs:
+                    # Scale ZYX
                     scales = np.array(ds.attrs["element_size_um"])
-                    scales /= scales[1]
+
+                    if scales.size == 1:
+                        # scale => [scale, scale, scale]
+                        scales = np.repeat(scales, 3)
+                    elif scales.size == 2:
+                        # [scale_y, scale_x] => [1, scale_y, scale_x]
+                        scales = np.array([1, *scales])
+
+                    # Normalized the scale Y and X to 1.0
+                    scales /= scales[-1]
                     z_scale_widget.z_scale.value = scales[0]
 
             images = np.ascontiguousarray(images).astype("f4")
