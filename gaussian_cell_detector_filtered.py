@@ -12,6 +12,7 @@ from typing import Dict, Optional, Tuple
 import h5py
 import napari
 import numpy as np
+import roifile
 import torch
 import torch.nn.functional as F
 from magicgui import magicgui, use_app
@@ -47,6 +48,23 @@ def random_label_cmap(n=2**16, h=(0.0, 1.0), l=(0.4, 1.0), s=(0.2, 0.8), seed=42
 
 
 lbl_cmap = random_label_cmap()
+
+
+def generate_track_colors(
+    n_tracks: int, h=(0.0, 1.0), l=(0.4, 1.0), s=(0.2, 0.8), seed=42
+) -> np.ndarray:
+    """trackごとに異なる色を生成"""
+    rng = np.random.default_rng(seed)
+    h = rng.uniform(h[0], h[1], n_tracks)
+    l = rng.uniform(l[0], l[1], n_tracks)
+    s = rng.uniform(s[0], s[1], n_tracks)
+
+    alpha = 1.0
+    colors = np.stack(
+        [(*colorsys.hls_to_rgb(_h, _l, _s), alpha) for _h, _l, _s in zip(h, l, s)],
+        axis=0,
+    )
+    return (colors * 255).astype("u1")
 
 
 def create_conv3d_filter(kernel: np.ndarray):
@@ -217,6 +235,63 @@ def detect_local_maxima_3d(
     peaks = np.column_stack(np.nonzero(mask))
     peak_values = image[peaks[:, 0], peaks[:, 1], peaks[:, 2]]
     return peaks, peak_values
+
+
+def save_peaks(save_path: os.PathLike, peaks: np.ndarray):
+    save_path = Path(save_path)
+    header = "object_id,t,z,y,x,peak_values"
+    np.savetxt(
+        save_path,
+        peaks,
+        delimiter=",",
+        header=header,
+        comments="",
+        fmt="%d",
+    )
+
+    t = peaks[1]
+
+    max_obj_count = np.bincount(t).max() + 1
+
+    track_colors = generate_track_colors(max_obj_count)
+
+    unique_ids, first_indices = np.unique(t, return_index=True)
+    sections = first_indices[1:]
+
+    def roi_generator():
+        # We group the peaks by time
+        for t, peak_at_frame in zip(
+            unique_ids, np.array_split(peaks, sections, axis=0)
+        ):
+            for i, (obj_id, t, z, y, x, _) in enumerate(peak_at_frame):
+                obj_id = int(obj_id)
+                t = int(t)
+                z = int(z)
+                y = float(y)
+                x = float(x)
+
+                # Point ROI作成
+                roi = roifile.ImagejRoi.frompoints(
+                    np.array([(x, y)], dtype="f4"),
+                    name=f"Id_{obj_id}_t{int(t) + 1}",
+                    t=t + 1,  # t_position
+                    z=z + 1,  # z_position
+                )
+                roi.roitype = roifile.ROI_TYPE.POINT
+
+                roi.point_size = 3  # Large
+                roi.point_type = 0  # Hybrid (デフォルト)
+
+                # Converting RGBA colors to bytes representation
+                color = bytes(track_colors[i])
+
+                roi.stroke_color = color
+                roi.fill_color = color
+                yield roi
+
+    roifile.roiwrite(
+        save_path.with_name(save_path.stem + "_RoiSet.zip"), roi_generator(), mode="w"
+    )
 
 
 @dataclass(frozen=True)
@@ -781,15 +856,7 @@ def main():
                 object_id = np.arange(len(peaks))
                 peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
                 peaks2 = peaks2.astype("u4")
-                header = "object_id,t,z,y,x,peak_values"
-                np.savetxt(
-                    save_path,
-                    peaks2,
-                    delimiter=",",
-                    header=header,
-                    comments="",
-                    fmt="%d",
-                )
+                save_peaks(save_path, peaks2)
                 show_message(f"All Peaks was saved at: {save_path}")
 
             elapse = time.perf_counter() - tic
@@ -1028,15 +1095,8 @@ def main():
         object_id = np.arange(len(peaks))
         peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
         peaks2 = peaks2.astype("u4")
-        header = "object_id,t,z,y,x,peak_values"
-        np.savetxt(
-            save_path,
-            peaks2,
-            delimiter=",",
-            header=header,
-            comments="",
-            fmt="%d",
-        )
+
+        save_peaks(save_path, peaks2)
 
         # Save filter and local maximum conditions
 
