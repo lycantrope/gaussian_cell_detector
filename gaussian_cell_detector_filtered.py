@@ -16,7 +16,15 @@ import roifile
 import torch
 import torch.nn.functional as F
 from magicgui import magicgui, use_app
-from magicgui.widgets import Container, FileEdit, Label, LineEdit, PushButton, TextEdit
+from magicgui.widgets import (
+    Container,
+    FileEdit,
+    Label,
+    LineEdit,
+    PushButton,
+    Table,
+    TextEdit,
+)
 from napari.qt import thread_worker
 from napari.utils import Colormap
 from qtpy.QtWidgets import QScrollArea
@@ -51,13 +59,21 @@ lbl_cmap = random_label_cmap()
 
 
 def generate_track_colors(
-    n_tracks: int, h=(0.0, 1.0), l=(0.4, 1.0), s=(0.2, 0.8), seed=42
+    n_tracks: int,
+    h=(0.0, 1.0),
+    l=(0.4, 1.0),
+    s=(0.2, 0.8),
+    seed=42,
+    n=2**16,
 ) -> np.ndarray:
     """trackごとに異なる色を生成"""
     rng = np.random.default_rng(seed)
-    h = rng.uniform(h[0], h[1], n_tracks)
-    l = rng.uniform(l[0], l[1], n_tracks)
-    s = rng.uniform(s[0], s[1], n_tracks)
+    # We let hue is uniform distribute and other are much like randomly.
+    h = np.linspace(h[0], h[1], n_tracks)
+    l = rng.uniform(l[0], l[1], n)
+    l = np.random.choice(l, n_tracks, replace=False)
+    s = rng.uniform(s[0], s[1], n)
+    s = np.random.choice(s, n_tracks, replace=False)
 
     alpha = 1.0
     colors = np.stack(
@@ -237,9 +253,10 @@ def detect_local_maxima_3d(
     return peaks, peak_values
 
 
-def save_peaks(save_path: os.PathLike, peaks: np.ndarray):
+def save_all_peaks(save_path: os.PathLike, peaks: np.ndarray):
     save_path = Path(save_path)
     header = "object_id,t,z,y,x,peak_values"
+    # Save to CSV file.
     np.savetxt(
         save_path,
         peaks,
@@ -249,7 +266,7 @@ def save_peaks(save_path: os.PathLike, peaks: np.ndarray):
         fmt="%d",
     )
 
-    t = peaks[1]
+    t = peaks[:, 1]
 
     max_obj_count = np.bincount(t).max() + 1
 
@@ -289,6 +306,7 @@ def save_peaks(save_path: os.PathLike, peaks: np.ndarray):
                 roi.fill_color = color
                 yield roi
 
+    # Save to RoiFile
     roifile.roiwrite(
         save_path.with_name(save_path.stem + "_RoiSet.zip"), roi_generator(), mode="w"
     )
@@ -486,6 +504,13 @@ def main():
     # status board for output messages
     status_board = TextEdit(label="Log")
     status_board.read_only = True
+    status_board.min_width = 360
+    peaks_board = Table(
+        value=None, columns=["object_id", "t", "z", "y", "x", "peak_values"]
+    )
+    peaks_board.read_only = True
+    peaks_board.min_height = 480
+    peaks_board.min_width = 480
 
     def show_message(msg: str, end="\n"):
         print(msg, end=end)
@@ -849,16 +874,26 @@ def main():
             find_peak_widget.running.text = "Idle"
             find_peak_widget.mode.enabled = True
             load_image_widget.enabled = True
+            keys = sorted(results.keys())
+            peaks = np.concatenate([results[k].peaks for k in keys])
+            peak_values = np.concatenate([results[k].peak_values for k in keys])
+            object_id = np.arange(len(peaks))
+            peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
+            peaks2 = peaks2.astype("u4")
             if mode == "Batch All":
-                keys = sorted(results.keys())
-                peaks = np.concatenate([results[k].peaks for k in keys])
-                peak_values = np.concatenate([results[k].peak_values for k in keys])
-                object_id = np.arange(len(peaks))
-                peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
-                peaks2 = peaks2.astype("u4")
-                save_peaks(save_path, peaks2)
+                save_all_peaks(save_path, peaks2)
                 show_message(f"All Peaks was saved at: {save_path}")
-
+            else:
+                peaks2[:, 1] += int(load_image_widget.start.value)
+            peaks_board.value = peaks2
+            peaks_board.column_headers = [
+                "object_id",
+                "t",
+                "z",
+                "y",
+                "x",
+                "peak_values",
+            ]
             elapse = time.perf_counter() - tic
             show_message(f"Find Peaks Finished: {elapse:.2f}")
             viewer = napari.current_viewer()
@@ -959,6 +994,7 @@ def main():
 
             features = peak_layer.features
             features.loc[len(prev_peaks) :, "group"] = group
+
             peak_layer.features = features
         else:
             # insert peaks
@@ -969,12 +1005,13 @@ def main():
                 face_color="group",
                 face_colormap=lbl_cmap,
                 scale=viewer.layers["original"].scale,
-                features={"group": group},
+                features={
+                    "group": group,
+                },
                 text={
                     "string": "{group}",
                     "anchor": "upper_left",
                     "size": 12,  # fontsize
-                    "color": "yellow",
                     "translation": [0, 0, -4, 0],
                 },
             )
@@ -1094,9 +1131,11 @@ def main():
         peak_values = np.concatenate([results[k].peak_values for k in keys])
         object_id = np.arange(len(peaks))
         peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
-        peaks2 = peaks2.astype("u4")
-
-        save_peaks(save_path, peaks2)
+        peaks2 = peaks2.astype("u8")
+        # if it is not batch mode, we add the start value back to the t.
+        if len(peaks) <= load_image_widget.no_of_frames.value:
+            peaks2[:, 1] += load_image_widget.start.value
+        save_all_peaks(save_path, peaks2)
 
         # Save filter and local maximum conditions
 
@@ -1113,6 +1152,14 @@ def main():
 
         show_message(f"Save results and params to: {save_path.parent}")
 
+    def _table_callback(row_idx):
+        obj_id, t, z, y, x, _ = np.asarray(peaks_board.data[row_idx, :]).astype("i8")
+        t = int(t - load_image_widget.start.value)
+        if viewer is not None:
+            viewer.camera.center = (float(z), float(y), float(x))
+            viewer.dims.current_step = [t, z, y, x]
+
+    peaks_board.native.cellClicked.connect(_table_callback)
     save_result_widget = Container(
         widgets=[
             *save_result_labels,
@@ -1125,9 +1172,16 @@ def main():
     filter_widget()
     find_peak_widget.running.value = False
     find_peak_widget.running.text = "Idle"
+    # Set maximum size
+    load_image_widget.max_width = 320
+    z_scale_widget.max_width = 320
+    filter_widget.max_width = 180
+    find_peak_widget.max_width = 240
+    save_result_widget.max_width = 320
 
     # main loop
     viewer = napari.Viewer(ndisplay=2)
+
     container = Container(
         widgets=[
             Container(
@@ -1151,10 +1205,8 @@ def main():
         labels=False,
         scrollable=True,
     )
-
     wid1 = QScrollArea()
     wid1.setWidget(container.native)
-    wid1.setMaximumWidth(480)
     wid1 = viewer.window.add_dock_widget(
         wid1,
         area="right",
@@ -1162,24 +1214,35 @@ def main():
         tabify=True,
     )
     wid2 = QScrollArea()
-    wid2.setWidget(
+    wid2.setWidget(Container(widgets=[Label(value="Peaks"), peaks_board]).native)
+    wid2 = viewer.window.add_dock_widget(
+        wid2,
+        area="right",
+        name="Peaks",
+        tabify=True,
+    )
+
+    wid3 = QScrollArea()
+    wid3.setWidget(
         Container(
             widgets=[Label(value="Status"), status_board],
             labels=False,
         ).native
     )
 
-    wid2 = viewer.window.add_dock_widget(
-        wid2,
+    wid3 = viewer.window.add_dock_widget(
+        wid3,
         area="right",
         name="Log",
         tabify=True,
     )
 
     # This setting can move GaussianCellDetector to the first at startup
+    wid3.hide()
     wid2.hide()
     wid1.show()
     wid2.show()
+    wid3.show()
 
     napari.run()
 

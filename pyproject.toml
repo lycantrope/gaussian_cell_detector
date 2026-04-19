@@ -7,14 +7,13 @@ requires-python = ">=3.10"
 dependencies = [
     "h5py",
     "hdf5plugin",
-    "jax",
     "magicgui",
     "napari[pyqt6]",
+    "roifile",
     "ruamel-yaml",
     "scikit-image",
     "tifffile",
     "torch",
-    "zarr",
 ]
 
 [dependency-groups]
