@@ -27,7 +27,7 @@ from magicgui.widgets import (
 )
 from napari.qt import thread_worker
 from napari.utils import Colormap
-from qtpy.QtWidgets import QScrollArea
+from qtpy.QtWidgets import QScrollArea, QSizePolicy
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from scipy.ndimage import distance_transform_edt, maximum_filter
@@ -515,7 +515,7 @@ def main():
     def show_message(msg: str, end="\n"):
         print(msg, end=end)
         status_board.value = (
-            f"[{datetime.now().strftime('%H:%M:%S')}] {msg}{end}{status_board.value}"
+            f"{status_board.value}[{datetime.now().strftime('%H:%M:%S')}] {msg}{end}"
         )
 
     def clear_peak_results():
@@ -984,7 +984,7 @@ def main():
             return
 
         group = np.arange(len(peaks_for_display)) + 1
-
+        # border_color = np.ones(len(peaks_for_display), dtype="u1")
         if "peaks" in viewer.layers:
             peak_layer = viewer.layers["peaks"]
             assert peak_layer is not None, ""
@@ -994,27 +994,40 @@ def main():
 
             features = peak_layer.features
             features.loc[len(prev_peaks) :, "group"] = group
+            features.loc[len(prev_peaks) :, "selected"] = [""] * len(group)
 
             peak_layer.features = features
         else:
             # insert peaks
-            viewer.add_points(
+            peak_layer = viewer.add_points(
                 peaks_for_display,
                 name="peaks",
                 size=4,
                 face_color="group",
                 face_colormap=lbl_cmap,
+                border_color="blue",
+                # border_colormap=Colormap(
+                #     [
+                #         (0.0, 0, 1, 1),
+                #         (0.0, 0, 1.0, 1),
+                #         (1.0, 0, 0, 1),
+                #     ],
+                # ),
                 scale=viewer.layers["original"].scale,
                 features={
                     "group": group,
+                    "selected": [""] * len(group),
                 },
                 text={
-                    "string": "{group}",
+                    "string": "{selected}{group}{selected}",
                     "anchor": "upper_left",
                     "size": 12,  # fontsize
                     "translation": [0, 0, -4, 0],
                 },
             )
+            # Use colormap mode to set the color
+            peak_layer.face_color_mode = "colormap"
+            # peak_layer.border_color_mode = "colormap"
 
         if peak_res.filtered_im is not None:
             if "filtered" in viewer.layers:
@@ -1159,6 +1172,15 @@ def main():
             viewer.camera.center = (float(z), float(y), float(x))
             viewer.dims.current_step = [t, z, y, x]
 
+            peak_layer = viewer.layers["peaks"]
+            assert peak_layer is not None, ""
+            peak_layer.selected_data = {obj_id}
+            features = peak_layer.features
+            features.loc[:, "selected"] = ""
+            features.loc[obj_id, "selected"] = "|"
+
+            peak_layer.features = features
+
     peaks_board.native.cellClicked.connect(_table_callback)
     save_result_widget = Container(
         widgets=[
@@ -1178,9 +1200,17 @@ def main():
     filter_widget.max_width = 180
     find_peak_widget.max_width = 240
     save_result_widget.max_width = 320
-
     # main loop
     viewer = napari.Viewer(ndisplay=2)
+
+    status_board.native.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Expanding,
+    )
+    peaks_board.native.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Expanding,
+    )
 
     container = Container(
         widgets=[
@@ -1213,25 +1243,16 @@ def main():
         name="GaussianCellDetector",
         tabify=True,
     )
-    wid2 = QScrollArea()
-    wid2.setWidget(Container(widgets=[Label(value="Peaks"), peaks_board]).native)
+
     wid2 = viewer.window.add_dock_widget(
-        wid2,
+        peaks_board.native,
         area="right",
         name="Peaks",
         tabify=True,
     )
 
-    wid3 = QScrollArea()
-    wid3.setWidget(
-        Container(
-            widgets=[Label(value="Status"), status_board],
-            labels=False,
-        ).native
-    )
-
     wid3 = viewer.window.add_dock_widget(
-        wid3,
+        status_board.native,
         area="right",
         name="Log",
         tabify=True,
