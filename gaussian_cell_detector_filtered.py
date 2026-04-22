@@ -504,13 +504,10 @@ def main():
     # status board for output messages
     status_board = TextEdit(label="Log")
     status_board.read_only = True
-    status_board.min_width = 360
     peaks_board = Table(
         value=None, columns=["object_id", "t", "z", "y", "x", "peak_values"]
     )
     peaks_board.read_only = True
-    peaks_board.min_height = 480
-    peaks_board.min_width = 480
 
     def show_message(msg: str, end="\n"):
         print(msg, end=end)
@@ -530,10 +527,11 @@ def main():
                 viewer.layers.remove(viewer.layers[layer])
 
     def imread_all_iter(filename, load_mode, used_channel=0):
-        def _ensure_3d(im):
+        def _ensure_3d(im: np.ndarray):
             if im.ndim == 2:
                 im = im[None, ...]
-            return np.ascontiguousarray(im).astype("f4")
+            dtype = im.dtype.newbyteorder("L")
+            return np.ascontiguousarray(im).astype(dtype)
 
         if load_mode == "TIFF stack":
             image_mmap = tifffile.memmap(filename, mode="r")
@@ -595,8 +593,9 @@ def main():
                 no_of_frames = images.shape[0] - start
 
             assert start + no_of_frames < images.shape[0], ""
+            dtype = image_mmap.dtype.newbyteorder("L")
             images = np.ascontiguousarray(images[start : start + no_of_frames]).astype(
-                "f4"
+                dtype
             )
 
             del image_mmap
@@ -1235,6 +1234,10 @@ def main():
         labels=False,
         scrollable=True,
     )
+    my_menu = None
+    if viewer.window.main_menu is not None:
+        my_menu = viewer.window.main_menu.addMenu("GaussianCellDetector")
+
     wid1 = QScrollArea()
     wid1.setWidget(container.native)
     wid1 = viewer.window.add_dock_widget(
@@ -1242,21 +1245,28 @@ def main():
         area="right",
         name="GaussianCellDetector",
         tabify=True,
+        menu=my_menu,
     )
 
     wid2 = viewer.window.add_dock_widget(
         peaks_board.native,
-        area="right",
+        area="bottom",
         name="Peaks",
         tabify=True,
+        menu=my_menu,
     )
 
     wid3 = viewer.window.add_dock_widget(
         status_board.native,
-        area="right",
+        area="bottom",
         name="Log",
         tabify=True,
+        menu=my_menu,
     )
+
+    wid1._close_btn = False
+    wid2._close_btn = False
+    wid3._close_btn = False
 
     # This setting can move GaussianCellDetector to the first at startup
     wid3.hide()
