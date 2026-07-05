@@ -39,6 +39,7 @@ def create_ellipsoid_filter(
     w_x: int,
     w_y: int,
     w_z: int,
+    **kwargs,
 ):
     # Apply TilG directly
     x = np.arange(-w_x, w_x + 1)
@@ -110,6 +111,7 @@ def create_log_filter(
     w_x: int,
     w_y: int,
     w_z: int,
+    **kwargs,
 ):
     # Apply TilG directly
 
