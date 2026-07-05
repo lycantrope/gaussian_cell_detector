@@ -1,0 +1,16 @@
+LocalMaxima:
+  min_distance: 1
+  threshold_percentile: 99.5
+Filter:
+  # Valid filter_type: "LoG", "DoG", "TilG"
+  filter_type: "TilG"
+  sigma_x: 2.0
+  sigma_y: 2.0
+  sigma_z: 1.0
+  w_x: 4
+  w_y: 4
+  w_z: 1
+  # Following parameters only adapt for "DoG" filter
+  sigma2_x: 3.5
+  sigma2_y: 3.5
+  sigma2_z: 1.5
