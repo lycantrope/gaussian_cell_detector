@@ -714,13 +714,15 @@ def main():
         if "original" in viewer.layers:
             viewer.layers.remove(viewer.layers["original"])
 
-        low, high = np.percentile(images, (0, 99))
+        min_val, p99_val, max_val = np.percentile(images, (0, 99, 100))
+
         viewer.add_image(
             images,
             name="original",
             colormap="gray",
             scale=scales,
-            contrast_limits=(low, high),
+            contrast_limits=(min_val, p99_val),
+            contrast_limits_range=(min_val, max_val),
         )
         show_message(f"Image Loaded {images.shape}")
         clear_peak_results()
