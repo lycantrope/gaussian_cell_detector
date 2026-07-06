@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import h5py
+import hdf5plugin
 import napari
 import numpy as np
 import roifile
@@ -35,6 +36,8 @@ from skimage import color, morphology
 from skimage.filters import threshold_otsu
 from skimage.segmentation import watershed
 from tifffile import tifffile
+
+os.environ["HDF5_PLUGIN_PATH"] = hdf5plugin.PLUGINS_PATH
 
 DEVICE = torch.accelerator.current_accelerator() or torch.device("cpu")
 
@@ -553,6 +556,14 @@ def main():
             yield len(filelist)
             for f in filelist:
                 yield _ensure_3d(tifffile.imread(f))
+        elif load_mode == "HDF":
+            with h5py.File(filename, "r") as handler:
+                # TCZYX
+                dset = handler["data"]
+                assert isinstance(dset, h5py.Dataset), "Invalid dataset"
+                yield len(dset)
+                for i in range(len(dset)):
+                    yield np.ascontiguousarray(dset[i, used_channel]).astype("f4")
 
         elif load_mode == "HDF5 (ascent)":
             with h5py.File(filename, "r") as handler:
@@ -620,6 +631,33 @@ def main():
                 # (T, Y, X) => (T, 1, Y, X)
                 images[:, None, ...]
             images = np.ascontiguousarray(images)
+        elif load_mode == "HDF":
+            with h5py.File(first_file, "r") as handler:
+                # TCZYX
+                dset = handler["data"]
+                assert isinstance(dset, h5py.Dataset), "Invalid dataset"
+                if no_of_frames is None:
+                    no_of_frames = len(dset) - start
+
+                end = min(start + no_of_frames, len(dset))
+                images = dset[start:end, used_channel]
+                # I add the attribute in the ascent dataset that represent real scales
+                if "element_size_um" in dset.attrs:
+                    # Scale ZYX
+                    scales = np.array(dset.attrs["element_size_um"])
+
+                    if scales.size == 1:
+                        # scale => [scale, scale, scale]
+                        scales = np.repeat(scales, 3)
+                    elif scales.size == 2:
+                        # [scale_y, scale_x] => [1, scale_y, scale_x]
+                        scales = np.array([1, *scales])
+
+                    # Normalized the scale Y and X to 1.0
+                    scales /= scales[-1]
+                    z_scale_widget.z_scale.value = scales[0]
+
+            images = np.ascontiguousarray(images).astype("f4")
 
         elif load_mode == "HDF5 (ascent)":
             with h5py.File(first_file, "r") as handler:
@@ -667,7 +705,7 @@ def main():
         return images, scales
 
     @magicgui(
-        load_mode={"choices": ["TIFF stack", "TIFF sequence", "HDF5 (ascent)"]},
+        load_mode={"choices": ["TIFF stack", "TIFF sequence", "HDF5", "HDF5 (ascent)"]},
         first_file={
             "widget_type": FileEdit,
             "mode": "r",
@@ -696,7 +734,12 @@ def main():
         """
         nonlocal images
 
-        if not first_file.is_file() and first_file.suffix != ".tif":
+        if not first_file.is_file() and first_file.suffix.lower() not in (
+            ".tif",
+            ".tiff",
+            ".h5",
+            ".hdf5",
+        ):
             show_message(f"Selected file is not a valid TIFF file: {first_file.name}")
             return
 
@@ -1039,16 +1082,16 @@ def main():
             # Either TZYX or ZYX should works
             scales[-3] = z_scale_widget.z_scale.value
 
-            contrast_limits = np.percentile(filtered_im, (0.0, 99.0))
-
+            min_val, p99_val, max_val = np.percentile(filtered_im, (0.0, 99.0, 100.0))
             viewer.add_image(
                 filtered_im,
                 name="filtered",
                 colormap="gray",
                 scale=scales,
-                contrast_limits=contrast_limits,
+                contrast_limits=(min_val, p99_val),
                 translate=[peak_res.t, 0, 0, 0],
             )
+            viewer["filtered_im"].contrast_limits_range = (min_val, max_val)
 
         if peak_res.model_im is not None:
             if "model" in viewer.layers:
@@ -1060,7 +1103,7 @@ def main():
             # Either TZYX or ZYX should works
             scales[-3] = z_scale_widget.z_scale.value
 
-            contrast_limits = np.percentile(model_im, (0.0, 99.0))
+            # contrast_limits = np.percentile(model_im, (0.0, 99.0))
             viewer.add_image(
                 color.label2rgb(model_im),
                 name="model",
