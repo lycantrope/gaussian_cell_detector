@@ -192,6 +192,11 @@ def main():
         localmaxi_kws = parameters["LocalMaxima"]
     except KeyError as e:
         parser.error(f"input yaml is not a vaild yaml file: {e}")
+    load_kws = parameters.get("ImageLoad", {})
+    start_frame = load_kws.get("start_frame", 0)
+    no_of_frames = load_kws.get("no_of_frames", 0)
+    every_n_frames = load_kws.get("every_n_frames", 1)
+    max_number_of_peaks = localmaxi_kws.pop("max_number_of_peaks", 10000)
 
     print(filter_kws)
     print(localmaxi_kws)
@@ -200,7 +205,6 @@ def main():
     ch = f"c{args.use_channel:d}"
     with h5py.File(image_path, "r") as handler:
         keys = sorted(handler.keys(), key=lambda x: int(x[1:]))
-        total = len(keys)
 
         # Sanity test for HDF dataset
         if not keys:
@@ -212,9 +216,12 @@ def main():
             isinstance(grp, h5py.Group) and ch in grp.keys()
         ), f"Invalid group or channel number: {args.use_channel}"
 
-        for k in keys:
-            # Retrieve  time from key value
-            t = int(k[1:])
+        end = len(keys) if no_of_frames == 0 else min(start_frame + no_of_frames, len(keys))
+        keys = keys[start_frame:end:every_n_frames]
+        total = len(keys)
+
+        for i, k in enumerate(keys):
+            t = i
             # Process one frame at a time
             dset = handler[f"{k}/{ch}"]
             assert isinstance(dset, h5py.Dataset), "Sanity test"
@@ -225,7 +232,9 @@ def main():
                 filtered_im,
                 **localmaxi_kws,
             )
-            # Time estimation.
+            sort_idx = np.argsort(peak_values)[::-1][:max_number_of_peaks]
+            peaks = peaks[sort_idx]
+            peak_values = peak_values[sort_idx]
             n_peaks = peak_values.size
             if n_peaks > 0:
                 t_indices = np.full((n_peaks, 1), fill_value=t, dtype=peaks.dtype)

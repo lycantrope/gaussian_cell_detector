@@ -450,6 +450,7 @@ def find_peak_all(
     parameters,
     min_distances,
     threshold_percentile,
+    max_number_of_peaks,
     show_filter: bool = False,
     show_model: bool = False,
 ):
@@ -465,6 +466,9 @@ def find_peak_all(
             min_distances,
             threshold_percentile,
         )
+        sort_idx = np.argsort(peak_values)[::-1][:max_number_of_peaks]
+        peaks = peaks[sort_idx]
+        peak_values = peak_values[sort_idx]
         # Time estimation.
         n_peaks = peak_values.size
         if n_peaks > 0:
@@ -588,53 +592,39 @@ def main():
             return
 
     def imread(
-        first_file, load_mode, start=0, no_of_frames=-1, used_channel=0
+        first_file, load_mode, start=0, no_of_frames=0, every_n_frames=1, used_channel=0
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         scales = None
         if load_mode == "TIFF stack":
             image_mmap = tifffile.memmap(first_file, mode="r")
+            dtype = image_mmap.dtype.newbyteorder("L")
 
             if image_mmap.ndim == 4:
                 T = image_mmap.shape[0]
-                images = image_mmap[: min(no_of_frames, T)]
+                end = T if no_of_frames == 0 else min(start + no_of_frames, T)
+                indices = list(range(start, end, every_n_frames))
+                images = np.ascontiguousarray(image_mmap[indices]).astype(dtype)
             elif image_mmap.ndim == 3:
-                # (Z, Y, X) => (1, Z, Y, X)
-                images = image_mmap[None, ...]
+                images = np.ascontiguousarray(image_mmap[None, ...]).astype(dtype)
             elif image_mmap.ndim == 2:
-                # (Y, X) => (1, 1, Y, X)
-                images = image_mmap[None, None, ...]
+                images = np.ascontiguousarray(image_mmap[None, None, ...]).astype(dtype)
             else:
                 raise ValueError(f"Unsupported shape : {image_mmap.shape}")
-            if no_of_frames is None:
-                no_of_frames = images.shape[0] - start
-
-            assert start + no_of_frames < images.shape[0], ""
-            dtype = image_mmap.dtype.newbyteorder("L")
-            images = np.ascontiguousarray(images[start : start + no_of_frames]).astype(
-                dtype
-            )
 
             del image_mmap
         elif load_mode == "TIFF sequence":
             filelist = get_file_list(first_file)
-            # We read the file starts from the first_file
             start = filelist.index(first_file)
             load_image_widget.start.value = start
-            if no_of_frames is None:
-                no_of_frames = len(filelist) - start
-
-            end = min(start + no_of_frames, len(filelist))
-            filelist = filelist[start:end]
-            # check file shape:
+            end = len(filelist) if no_of_frames == 0 else min(start + no_of_frames, len(filelist))
+            filelist = filelist[start:end:every_n_frames]
             im = tifffile.imread(filelist[0])
             assert im.ndim < 4, "Tiff sequence does not support 4D stack (T, Z, Y, X)"
 
-            img_seq = tifffile.TiffSequence(get_file_list(first_file))
+            img_seq = tifffile.TiffSequence(filelist)
             images = img_seq.asarray().astype("f4")
             if images.ndim == 3:
-                # Read from 2D sequence.
-                # (T, Y, X) => (T, 1, Y, X)
-                images[:, None, ...]
+                images = images[:, None, ...]
             images = np.ascontiguousarray(images)
         elif load_mode == "HDF":
             with h5py.File(first_file, "r") as handler:
@@ -669,11 +659,8 @@ def main():
                 t_keys = (k for k in handler.keys() if str(k).startswith("t"))
                 t_keys = sorted(t_keys, key=lambda x: int(x[1:]))
 
-                if no_of_frames is None:
-                    no_of_frames = len(t_keys) - start
-
-                end = min(start + no_of_frames, len(t_keys))
-                t_keys = t_keys[start:end]
+                end = len(t_keys) if no_of_frames == 0 else min(start + no_of_frames, len(t_keys))
+                t_keys = t_keys[start:end:every_n_frames]
                 grp = handler[t_keys[0]]
                 assert (
                     isinstance(grp, h5py.Group) and f"c{used_channel:d}" in grp.keys()
@@ -716,8 +703,9 @@ def main():
             "mode": "r",
             "filter": "*.tif *.tiff *.h5",
         },
-        start={"min": 0, "max": 10000, "step": 1},
+        start={"min": 0, "max": 10000, "step": 1, "label": "start_frame"},
         no_of_frames={"min": 0, "max": 10000, "step": 1},
+        every_n_frames={"min": 1, "max": 10000, "step": 1},
         used_channel={"min": 0, "max": 10000, "step": 1},
         persist=True,
         call_button="Load Image",
@@ -726,6 +714,7 @@ def main():
         load_mode="TIFF stack",
         start: int = 0,
         no_of_frames: int = 10000,
+        every_n_frames: int = 1,
         first_file: Path = Path.home(),
         used_channel=1,
     ):
@@ -754,6 +743,7 @@ def main():
             load_mode=load_mode,
             start=start,
             no_of_frames=no_of_frames,
+            every_n_frames=every_n_frames,
             used_channel=used_channel,
         )
 
@@ -858,6 +848,7 @@ def main():
         call_button="Find peaks",
         min_distance={"min": 1, "max": 5, "step": 1},
         threshold_percentile={"min": 80, "max": 99.99, "step": 0.01},
+        max_number_of_peaks={"min": 1, "max": 10000, "step": 1},
         mode={"choices": ["This frame", "All Loaded Frames", "Batch All"]},
         running={
             "widget_type": "CheckBox",
@@ -869,6 +860,7 @@ def main():
     def find_peak_widget(
         min_distance: int,
         threshold_percentile: float = 99.5,
+        max_number_of_peaks: int = 10000,
         mode: str = "This frame",
         show_filtered: bool = False,
         show_model: bool = False,
@@ -979,6 +971,7 @@ def main():
             parameters,
             min_distances,
             threshold_percentile,
+            max_number_of_peaks,
             show_filtered and is_single,
             show_model and is_single,
         )
@@ -1195,7 +1188,10 @@ def main():
         peaks2 = np.hstack((object_id[:, None], peaks, peak_values[:, None]))
         peaks2 = peaks2.astype("u8")
         # if it is not batch mode, we add the start value back to the t.
-        if len(peaks) <= load_image_widget.no_of_frames.value:
+        no_of_frames_val = load_image_widget.no_of_frames.value
+        if no_of_frames_val == 0 and images is not None:
+            no_of_frames_val = images.shape[0]
+        if len(peaks) <= no_of_frames_val:
             peaks2[:, 1] += load_image_widget.start.value
         save_all_peaks(save_path, peaks2)
 
