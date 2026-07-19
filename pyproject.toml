@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
+gaussian-cell-detector = "gaussian_cell_detector_filtered:main"
 gaussian-cell-detector-cli = "gaussian_cell_detector_cli:main"
 
 [dependency-groups]
