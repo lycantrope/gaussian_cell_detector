@@ -39,7 +39,12 @@ from tifffile import tifffile
 
 os.environ["HDF5_PLUGIN_PATH"] = hdf5plugin.PLUGINS_PATH
 
-DEVICE = torch.accelerator.current_accelerator() or torch.device("cpu")
+#DEVICE = torch.accelerator.current_accelerator() or torch.device("cpu")
+DEVICE = (
+    torch.device("mps") if torch.backends.mps.is_available() else
+    torch.device("cuda") if torch.cuda.is_available() else
+    torch.device("cpu")
+)
 
 
 def random_label_cmap(n=2**16, h=(0.0, 1.0), l=(0.4, 1.0), s=(0.2, 0.8), seed=42):
@@ -1083,7 +1088,7 @@ def main():
             scales[-3] = z_scale_widget.z_scale.value
 
             min_val, p99_val, max_val = np.percentile(filtered_im, (0.0, 99.0, 100.0))
-            viewer.add_image(
+            filtered_im_layer = viewer.add_image(
                 filtered_im,
                 name="filtered",
                 colormap="gray",
@@ -1091,7 +1096,7 @@ def main():
                 contrast_limits=(min_val, p99_val),
                 translate=[peak_res.t, 0, 0, 0],
             )
-            viewer["filtered_im"].contrast_limits_range = (min_val, max_val)
+            filtered_im_layer.contrast_limits_range = (min_val, max_val)
 
         if peak_res.model_im is not None:
             if "model" in viewer.layers:
