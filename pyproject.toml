@@ -12,13 +12,19 @@ dependencies = [
     "roifile",
     "ruamel-yaml",
     "scikit-image",
+    "scipy",
     "tifffile",
     "torch",
 ]
 
+[project.scripts]
+gaussian-cell-detector-cli = "gaussian_cell_detector_cli:main"
+
 [dependency-groups]
 dev = ["ipykernel", "ipython", "matplotlib", "ruff"]
 
+[tool.setuptools]
+py-modules = ["gaussian_cell_detector_filtered", "gaussian_cell_detector_cli"]
 
 [tool.ruff.lint]
 select = ["I"]
