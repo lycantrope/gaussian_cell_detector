@@ -1,6 +1,6 @@
 [project]
 name = "gaussian-cell-detector"
-version = "0.1.0"
+version = "0.1.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,13 +12,20 @@ dependencies = [
     "roifile",
     "ruamel-yaml",
     "scikit-image",
+    "scipy",
     "tifffile",
     "torch",
 ]
 
+[project.scripts]
+gaussian-cell-detector = "gaussian_cell_detector_filtered:main"
+gaussian-cell-detector-cli = "gaussian_cell_detector_cli:main"
+
 [dependency-groups]
 dev = ["ipykernel", "ipython", "matplotlib", "ruff"]
 
+[tool.setuptools]
+py-modules = ["gaussian_cell_detector_filtered", "gaussian_cell_detector_cli"]
 
 [tool.ruff.lint]
 select = ["I"]

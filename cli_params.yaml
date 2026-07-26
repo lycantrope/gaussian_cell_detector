@@ -1,6 +1,11 @@
+ImageLoad:
+  start_frame: 0
+  no_of_frames: 0    # 0 = all frames
+  every_n_frames: 1
 LocalMaxima:
   min_distance: 1
   threshold_percentile: 99.5
+  max_number_of_peaks: 10000
 Filter:
   # Valid filter_type: "LoG", "DoG", "TilG"
   filter_type: "TilG"
